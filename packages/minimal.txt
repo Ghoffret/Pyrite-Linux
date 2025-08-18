@@ -1,0 +1,60 @@
+# Pyrite Linux - Minimal Package List
+# Core system packages for basic functionality
+
+# Base system
+base
+base-devel
+linux
+linux-firmware
+
+# Bootloader and EFI
+systemd
+efibootmgr
+
+# Filesystem tools
+btrfs-progs
+dosfstools
+e2fsprogs
+
+# Network
+networkmanager
+dhcpcd
+wpa_supplicant
+
+# Essential CLI tools
+bash-completion
+man-db
+man-pages
+texinfo
+nano
+vim
+git
+wget
+curl
+rsync
+htop
+tree
+unzip
+zip
+tar
+gzip
+
+# System monitoring and utilities
+lm_sensors
+smartmontools
+usbutils
+pciutils
+sudo
+which
+less
+grep
+sed
+awk
+
+# Security
+gnupg
+openssh
+
+# Compression and filesystem support
+zstd
+lz4

@@ -1,0 +1,168 @@
+# Pyrite Linux Hardware Configuration Templates
+
+# NVIDIA Graphics Configuration
+nvidia:
+  packages:
+    - nvidia
+    - nvidia-utils
+    - nvidia-settings
+    - cuda
+  kernel_params:
+    - nvidia-drm.modeset=1
+  xorg_config: |
+    Section "Device"
+        Identifier "NVIDIA Card"
+        Driver "nvidia"
+        VendorName "NVIDIA Corporation"
+        Option "NoLogo" "true"
+        Option "UseEDID" "false"
+        Option "ConnectedMonitor" "DFP"
+    EndSection
+
+# AMD Graphics Configuration  
+amd:
+  packages:
+    - mesa
+    - vulkan-radeon
+    - libva-mesa-driver
+    - mesa-vdpau
+    - radeontop
+  kernel_params:
+    - radeon.si_support=0
+    - amdgpu.si_support=1
+  
+# Intel Graphics Configuration
+intel:
+  packages:
+    - mesa
+    - vulkan-intel
+    - intel-media-driver
+    - libva-intel-driver
+    - intel-gpu-tools
+  kernel_params:
+    - i915.enable_guc=2
+    - i915.enable_fbc=1
+
+# WiFi Hardware Configuration
+wifi:
+  intel:
+    packages:
+      - iwlwifi-firmware
+    config: |
+      options iwlwifi power_save=1
+      options iwlwifi uapsd_disable=0
+  
+  broadcom:
+    packages:
+      - broadcom-wl
+    blacklist:
+      - b43
+      - ssb
+  
+  realtek:
+    packages:
+      - linux-firmware
+      - rtl8821cu-dkms-git
+  
+  atheros:
+    packages:
+      - linux-firmware
+      - ath10k-firmware
+
+# Audio Hardware Configuration
+audio:
+  intel_hda:
+    packages:
+      - sof-firmware
+      - alsa-firmware
+    config: |
+      options snd-hda-intel power_save=1
+      options snd-hda-intel power_save_controller=1
+  
+  usb_audio:
+    packages:
+      - alsa-utils
+      - alsa-plugins
+    config: |
+      options snd-usb-audio nrpacks=1
+
+# Bluetooth Configuration
+bluetooth:
+  packages:
+    - bluez
+    - bluez-utils
+    - bluez-firmware
+  services:
+    - bluetooth
+  config: |
+    [General]
+    Enable=Source,Sink,Media,Socket
+    AutoEnable=true
+
+# Network Hardware
+ethernet:
+  intel:
+    packages:
+      - e1000e
+    optimization: |
+      # Intel Ethernet optimization
+      echo 'net.core.rmem_max = 134217728' >> /etc/sysctl.conf
+      echo 'net.core.wmem_max = 134217728' >> /etc/sysctl.conf
+  
+  realtek:
+    packages:
+      - r8168
+    blacklist:
+      - r8169
+
+# Storage Hardware
+storage:
+  nvme:
+    packages:
+      - nvme-cli
+    optimization: |
+      # NVMe optimization
+      echo 'ACTION=="add|change", KERNEL=="nvme[0-9]n[0-9]", ATTR{queue/scheduler}="none"' > /etc/udev/rules.d/60-nvme-scheduler.rules
+  
+  ssd:
+    optimization: |
+      # SSD optimization
+      echo 'ACTION=="add|change", KERNEL=="sd[a-z]", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="mq-deadline"' > /etc/udev/rules.d/60-ssd-scheduler.rules
+  
+  hdd:
+    optimization: |
+      # HDD optimization  
+      echo 'ACTION=="add|change", KERNEL=="sd[a-z]", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="bfq"' > /etc/udev/rules.d/60-hdd-scheduler.rules
+
+# CPU Configuration
+cpu:
+  intel:
+    packages:
+      - intel-ucode
+      - thermald
+    governor: performance
+    
+  amd:
+    packages:
+      - amd-ucode
+    governor: performance
+
+# Power Management
+power:
+  laptop:
+    packages:
+      - tlp
+      - powertop
+    services:
+      - tlp
+    config: |
+      # TLP configuration for laptops
+      TLP_ENABLE=1
+      TLP_DEFAULT_MODE=BAT
+      CPU_SCALING_GOVERNOR_ON_AC=performance
+      CPU_SCALING_GOVERNOR_ON_BAT=powersave
+  
+  desktop:
+    packages:
+      - cpupower
+    governor: performance

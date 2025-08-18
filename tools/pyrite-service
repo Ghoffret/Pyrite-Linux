@@ -1,0 +1,676 @@
+#!/bin/bash
+
+#############################################################################
+#                                                                           #
+#                        Pyrite Service Manager                            #
+#                                                                           #
+#     Systemd service management wrapper with enhanced features            #
+#                                                                           #
+#############################################################################
+
+set -euo pipefail
+
+# Color codes for output
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly NC='\033[0m' # No Color
+
+print_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+confirm() {
+    local prompt="$1"
+    local default="${2:-n}"
+    local response
+    
+    if [[ "$default" == "y" ]]; then
+        read -r -p "$prompt [Y/n]: " response
+        response=${response:-y}
+    else
+        read -r -p "$prompt [y/N]: " response
+        response=${response:-n}
+    fi
+    
+    [[ "$response" =~ ^[Yy]$ ]]
+}
+
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        print_error "This command requires root privileges"
+        exit 1
+    fi
+}
+
+service_exists() {
+    local service="$1"
+    systemctl list-unit-files "${service}.service" &>/dev/null
+}
+
+show_service_status() {
+    local service="$1"
+    
+    if ! service_exists "$service"; then
+        print_error "Service '$service' not found"
+        return 1
+    fi
+    
+    echo -e "${BLUE}Service: $service${NC}"
+    echo "===================="
+    
+    # Status
+    local status
+    if systemctl is-active "$service" &>/dev/null; then
+        status="${GREEN}Active${NC}"
+    else
+        status="${RED}Inactive${NC}"
+    fi
+    echo -e "Status: $status"
+    
+    # Enabled/Disabled
+    local enabled
+    if systemctl is-enabled "$service" &>/dev/null; then
+        enabled="${GREEN}Enabled${NC}"
+    else
+        enabled="${YELLOW}Disabled${NC}"
+    fi
+    echo -e "Enabled: $enabled"
+    
+    # Failed status
+    if systemctl is-failed "$service" &>/dev/null; then
+        echo -e "Failed: ${RED}Yes${NC}"
+    fi
+    
+    echo
+    systemctl status "$service" --no-pager -l
+}
+
+list_services() {
+    local filter="${1:-all}"
+    
+    case "$filter" in
+        "active")
+            print_info "Active services:"
+            systemctl list-units --type=service --state=active --no-pager
+            ;;
+        "enabled")
+            print_info "Enabled services:"
+            systemctl list-unit-files --type=service --state=enabled --no-pager
+            ;;
+        "failed")
+            print_info "Failed services:"
+            systemctl list-units --type=service --state=failed --no-pager
+            ;;
+        "all")
+            print_info "All services:"
+            systemctl list-unit-files --type=service --no-pager
+            ;;
+        *)
+            print_error "Invalid filter: $filter"
+            print_info "Valid filters: active, enabled, failed, all"
+            ;;
+    esac
+}
+
+enable_service() {
+    local service="$1"
+    check_root
+    
+    if ! service_exists "$service"; then
+        print_error "Service '$service' not found"
+        return 1
+    fi
+    
+    if systemctl is-enabled "$service" &>/dev/null; then
+        print_warning "Service '$service' is already enabled"
+        return 0
+    fi
+    
+    print_info "Enabling service: $service"
+    if systemctl enable "$service"; then
+        print_success "Service '$service' enabled"
+        
+        if confirm "Start the service now?"; then
+            start_service "$service"
+        fi
+    else
+        print_error "Failed to enable service '$service'"
+        return 1
+    fi
+}
+
+disable_service() {
+    local service="$1"
+    check_root
+    
+    if ! service_exists "$service"; then
+        print_error "Service '$service' not found"
+        return 1
+    fi
+    
+    if ! systemctl is-enabled "$service" &>/dev/null; then
+        print_warning "Service '$service' is already disabled"
+        return 0
+    fi
+    
+    if systemctl is-active "$service" &>/dev/null; then
+        if confirm "Service '$service' is active. Stop it first?"; then
+            stop_service "$service"
+        fi
+    fi
+    
+    print_info "Disabling service: $service"
+    if systemctl disable "$service"; then
+        print_success "Service '$service' disabled"
+    else
+        print_error "Failed to disable service '$service'"
+        return 1
+    fi
+}
+
+start_service() {
+    local service="$1"
+    check_root
+    
+    if ! service_exists "$service"; then
+        print_error "Service '$service' not found"
+        return 1
+    fi
+    
+    if systemctl is-active "$service" &>/dev/null; then
+        print_warning "Service '$service' is already running"
+        return 0
+    fi
+    
+    print_info "Starting service: $service"
+    if systemctl start "$service"; then
+        print_success "Service '$service' started"
+    else
+        print_error "Failed to start service '$service'"
+        show_service_logs "$service" 20
+        return 1
+    fi
+}
+
+stop_service() {
+    local service="$1"
+    check_root
+    
+    if ! service_exists "$service"; then
+        print_error "Service '$service' not found"
+        return 1
+    fi
+    
+    if ! systemctl is-active "$service" &>/dev/null; then
+        print_warning "Service '$service' is not running"
+        return 0
+    fi
+    
+    print_info "Stopping service: $service"
+    if systemctl stop "$service"; then
+        print_success "Service '$service' stopped"
+    else
+        print_error "Failed to stop service '$service'"
+        return 1
+    fi
+}
+
+restart_service() {
+    local service="$1"
+    check_root
+    
+    if ! service_exists "$service"; then
+        print_error "Service '$service' not found"
+        return 1
+    fi
+    
+    print_info "Restarting service: $service"
+    if systemctl restart "$service"; then
+        print_success "Service '$service' restarted"
+    else
+        print_error "Failed to restart service '$service'"
+        show_service_logs "$service" 20
+        return 1
+    fi
+}
+
+reload_service() {
+    local service="$1"
+    check_root
+    
+    if ! service_exists "$service"; then
+        print_error "Service '$service' not found"
+        return 1
+    fi
+    
+    print_info "Reloading service: $service"
+    if systemctl reload "$service"; then
+        print_success "Service '$service' reloaded"
+    else
+        print_warning "Service '$service' does not support reload, trying restart..."
+        restart_service "$service"
+    fi
+}
+
+show_service_logs() {
+    local service="$1"
+    local lines="${2:-50}"
+    
+    if ! service_exists "$service"; then
+        print_error "Service '$service' not found"
+        return 1
+    fi
+    
+    print_info "Last $lines lines of logs for service: $service"
+    journalctl -u "$service" -n "$lines" --no-pager
+}
+
+follow_service_logs() {
+    local service="$1"
+    
+    if ! service_exists "$service"; then
+        print_error "Service '$service' not found"
+        return 1
+    fi
+    
+    print_info "Following logs for service: $service (Press Ctrl+C to stop)"
+    journalctl -u "$service" -f
+}
+
+create_service_unit() {
+    local service_name="$1"
+    check_root
+    
+    local unit_file="/etc/systemd/system/${service_name}.service"
+    
+    if [[ -f "$unit_file" ]]; then
+        print_error "Service unit file already exists: $unit_file"
+        return 1
+    fi
+    
+    print_info "Creating systemd service unit: $service_name"
+    
+    read -r -p "Description: " description
+    read -r -p "Executable path: " exec_start
+    read -r -p "User (leave empty for root): " user
+    read -r -p "Working directory (optional): " working_dir
+    
+    cat > "$unit_file" << EOF
+[Unit]
+Description=${description:-$service_name}
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=$exec_start
+Restart=always
+RestartSec=3
+EOF
+    
+    if [[ -n "$user" ]]; then
+        echo "User=$user" >> "$unit_file"
+    fi
+    
+    if [[ -n "$working_dir" ]]; then
+        echo "WorkingDirectory=$working_dir" >> "$unit_file"
+    fi
+    
+    cat >> "$unit_file" << EOF
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    systemctl daemon-reload
+    print_success "Service unit created: $unit_file"
+    
+    if confirm "Enable the service?"; then
+        enable_service "$service_name"
+    fi
+}
+
+remove_service_unit() {
+    local service="$1"
+    check_root
+    
+    local unit_file="/etc/systemd/system/${service}.service"
+    
+    if [[ ! -f "$unit_file" ]]; then
+        print_error "Service unit file not found: $unit_file"
+        return 1
+    fi
+    
+    if systemctl is-active "$service" &>/dev/null; then
+        print_warning "Service '$service' is active"
+        if confirm "Stop the service?"; then
+            stop_service "$service"
+        fi
+    fi
+    
+    if systemctl is-enabled "$service" &>/dev/null; then
+        print_warning "Service '$service' is enabled"
+        if confirm "Disable the service?"; then
+            disable_service "$service"
+        fi
+    fi
+    
+    if confirm "Remove service unit file: $unit_file?"; then
+        rm "$unit_file"
+        systemctl daemon-reload
+        print_success "Service unit removed: $service"
+    fi
+}
+
+show_system_status() {
+    print_info "System Status Overview"
+    echo "====================="
+    echo
+    
+    # System state
+    echo "System State: $(systemctl is-system-running)"
+    echo "Boot Time: $(systemd-analyze | head -1)"
+    echo
+    
+    # Failed units
+    local failed_count
+    failed_count=$(systemctl list-units --failed --no-legend | wc -l)
+    if [[ $failed_count -gt 0 ]]; then
+        echo -e "${RED}Failed Units: $failed_count${NC}"
+        systemctl list-units --failed --no-pager
+    else
+        echo -e "${GREEN}Failed Units: 0${NC}"
+    fi
+    
+    echo
+    
+    # Load averages
+    echo "System Load:"
+    uptime
+    echo
+    
+    # Memory usage
+    echo "Memory Usage:"
+    free -h
+    echo
+    
+    # Disk usage
+    echo "Disk Usage:"
+    df -h / /boot 2>/dev/null || df -h /
+}
+
+interactive_menu() {
+    while true; do
+        echo -e "${BLUE}"
+        echo "████████████████████████████████████████████████████████████████"
+        echo "██                                                            ██"
+        echo "██                  Pyrite Service Manager                    ██"
+        echo "██                                                            ██"
+        echo "████████████████████████████████████████████████████████████████"
+        echo -e "${NC}"
+        echo
+        
+        echo "Service Management Options:"
+        echo "=========================="
+        echo
+        echo "1) List services (all)"
+        echo "2) List active services"
+        echo "3) List enabled services"
+        echo "4) List failed services"
+        echo "5) Show service status"
+        echo "6) Start/Stop/Restart service"
+        echo "7) Enable/Disable service"
+        echo "8) Show service logs"
+        echo "9) Create new service"
+        echo "10) Remove service"
+        echo "11) System status overview"
+        echo "12) Exit"
+        echo
+        
+        read -r -p "Select option [1-12]: " choice
+        
+        case "$choice" in
+            1)
+                list_services all
+                ;;
+            2)
+                list_services active
+                ;;
+            3)
+                list_services enabled
+                ;;
+            4)
+                list_services failed
+                ;;
+            5)
+                read -r -p "Enter service name: " service
+                if [[ -n "$service" ]]; then
+                    show_service_status "$service"
+                fi
+                ;;
+            6)
+                read -r -p "Enter service name: " service
+                if [[ -n "$service" ]]; then
+                    echo "Actions: start, stop, restart, reload"
+                    read -r -p "Enter action: " action
+                    case "$action" in
+                        start) start_service "$service" ;;
+                        stop) stop_service "$service" ;;
+                        restart) restart_service "$service" ;;
+                        reload) reload_service "$service" ;;
+                        *) print_error "Invalid action" ;;
+                    esac
+                fi
+                ;;
+            7)
+                read -r -p "Enter service name: " service
+                if [[ -n "$service" ]]; then
+                    echo "Actions: enable, disable"
+                    read -r -p "Enter action: " action
+                    case "$action" in
+                        enable) enable_service "$service" ;;
+                        disable) disable_service "$service" ;;
+                        *) print_error "Invalid action" ;;
+                    esac
+                fi
+                ;;
+            8)
+                read -r -p "Enter service name: " service
+                if [[ -n "$service" ]]; then
+                    read -r -p "Follow logs? [y/N]: " follow
+                    if [[ "$follow" =~ ^[Yy]$ ]]; then
+                        follow_service_logs "$service"
+                    else
+                        show_service_logs "$service"
+                    fi
+                fi
+                ;;
+            9)
+                read -r -p "Enter new service name: " service
+                if [[ -n "$service" ]]; then
+                    create_service_unit "$service"
+                fi
+                ;;
+            10)
+                read -r -p "Enter service name to remove: " service
+                if [[ -n "$service" ]]; then
+                    remove_service_unit "$service"
+                fi
+                ;;
+            11)
+                show_system_status
+                ;;
+            12)
+                print_info "Exiting Pyrite Service Manager"
+                exit 0
+                ;;
+            *)
+                print_warning "Invalid selection"
+                ;;
+        esac
+        
+        echo
+        read -r -p "Press Enter to continue..."
+        clear
+    done
+}
+
+show_help() {
+    echo "Pyrite Service Manager - Systemd service management wrapper"
+    echo
+    echo "Usage: pyrite-service [COMMAND] [SERVICE] [OPTIONS]"
+    echo
+    echo "Commands:"
+    echo "  status SERVICE         Show service status"
+    echo "  start SERVICE          Start service"
+    echo "  stop SERVICE           Stop service"
+    echo "  restart SERVICE        Restart service"
+    echo "  reload SERVICE         Reload service configuration"
+    echo "  enable SERVICE         Enable service at boot"
+    echo "  disable SERVICE        Disable service at boot"
+    echo "  logs SERVICE [LINES]   Show service logs"
+    echo "  follow SERVICE         Follow service logs"
+    echo "  create SERVICE         Create new service unit"
+    echo "  remove SERVICE         Remove service unit"
+    echo "  list [FILTER]          List services (all|active|enabled|failed)"
+    echo "  overview               Show system status overview"
+    echo
+    echo "Options:"
+    echo "  -h, --help            Show this help message"
+    echo "  -i, --interactive     Launch interactive menu"
+    echo
+    echo "Examples:"
+    echo "  pyrite-service status nginx"
+    echo "  pyrite-service start sshd"
+    echo "  pyrite-service logs NetworkManager 100"
+    echo "  pyrite-service list failed"
+}
+
+main() {
+    case "${1:-}" in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        -i|--interactive|"")
+            interactive_menu
+            ;;
+        status)
+            if [[ -n "${2:-}" ]]; then
+                show_service_status "$2"
+            else
+                print_error "Service name required"
+                exit 1
+            fi
+            ;;
+        start)
+            if [[ -n "${2:-}" ]]; then
+                start_service "$2"
+            else
+                print_error "Service name required"
+                exit 1
+            fi
+            ;;
+        stop)
+            if [[ -n "${2:-}" ]]; then
+                stop_service "$2"
+            else
+                print_error "Service name required"
+                exit 1
+            fi
+            ;;
+        restart)
+            if [[ -n "${2:-}" ]]; then
+                restart_service "$2"
+            else
+                print_error "Service name required"
+                exit 1
+            fi
+            ;;
+        reload)
+            if [[ -n "${2:-}" ]]; then
+                reload_service "$2"
+            else
+                print_error "Service name required"
+                exit 1
+            fi
+            ;;
+        enable)
+            if [[ -n "${2:-}" ]]; then
+                enable_service "$2"
+            else
+                print_error "Service name required"
+                exit 1
+            fi
+            ;;
+        disable)
+            if [[ -n "${2:-}" ]]; then
+                disable_service "$2"
+            else
+                print_error "Service name required"
+                exit 1
+            fi
+            ;;
+        logs)
+            if [[ -n "${2:-}" ]]; then
+                show_service_logs "$2" "${3:-50}"
+            else
+                print_error "Service name required"
+                exit 1
+            fi
+            ;;
+        follow)
+            if [[ -n "${2:-}" ]]; then
+                follow_service_logs "$2"
+            else
+                print_error "Service name required"
+                exit 1
+            fi
+            ;;
+        create)
+            if [[ -n "${2:-}" ]]; then
+                create_service_unit "$2"
+            else
+                print_error "Service name required"
+                exit 1
+            fi
+            ;;
+        remove)
+            if [[ -n "${2:-}" ]]; then
+                remove_service_unit "$2"
+            else
+                print_error "Service name required"
+                exit 1
+            fi
+            ;;
+        list)
+            list_services "${2:-all}"
+            ;;
+        overview)
+            show_system_status
+            ;;
+        *)
+            print_error "Unknown command: $1"
+            show_help
+            exit 1
+            ;;
+    esac
+}
+
+# Script entry point
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

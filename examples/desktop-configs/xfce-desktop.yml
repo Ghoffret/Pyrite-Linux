@@ -1,0 +1,84 @@
+# Pyrite Linux Desktop Configuration Template
+# XFCE Desktop Environment
+
+# Install required packages
+packages:
+  - xfce4
+  - xfce4-goodies
+  - lightdm
+  - lightdm-gtk-greeter
+  - firefox
+  - thunderbird
+  - libreoffice-still
+  - gimp
+  - vlc
+  - file-roller
+
+# System configuration
+services:
+  enable:
+    - lightdm
+    - NetworkManager
+    - bluetooth
+  disable:
+    - gdm
+    - sddm
+
+# Audio configuration
+audio:
+  system: pipewire
+  packages:
+    - pipewire
+    - pipewire-alsa
+    - pipewire-pulse
+    - pipewire-jack
+    - wireplumber
+
+# Graphics configuration
+graphics:
+  auto_detect: true
+  fallback: mesa
+
+# Font configuration
+fonts:
+  packages:
+    - ttf-dejavu
+    - ttf-liberation
+    - noto-fonts
+    - noto-fonts-emoji
+  config:
+    antialias: true
+    hinting: slight
+
+# Theme configuration
+theme:
+  gtk: Adwaita-dark
+  icon: Adwaita
+  cursor: Adwaita
+
+# Applications
+applications:
+  terminal: xfce4-terminal
+  file_manager: thunar
+  text_editor: mousepad
+  image_viewer: ristretto
+  media_player: vlc
+
+# Desktop settings
+desktop:
+  wallpaper: /usr/share/backgrounds/xfce/xfce-blue.jpg
+  show_desktop_icons: true
+  panel_position: bottom
+  workspace_count: 4
+
+# Power management
+power:
+  laptop_mode: auto
+  suspend_timeout: 30
+  display_timeout: 15
+
+# Network
+network:
+  wifi_auto_connect: true
+  ethernet_auto_connect: true
+  vpn_support: true

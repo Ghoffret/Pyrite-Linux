@@ -1,0 +1,71 @@
+# Pyrite Linux - Development Package List
+# Development tools and compilers
+
+# Build tools
+gcc
+clang
+make
+cmake
+autoconf
+automake
+pkg-config
+libtool
+
+# Programming languages
+python
+python-pip
+nodejs
+npm
+rust
+go
+
+# Development utilities
+gdb
+valgrind
+strace
+ltrace
+perf
+
+# Version control
+git
+mercurial
+subversion
+
+# Text editors and IDEs
+neovim
+emacs
+code
+
+# Documentation tools
+doxygen
+graphviz
+sphinx
+
+# Libraries and headers
+glibc
+linux-headers
+sqlite
+postgresql-libs
+mysql-workbench
+
+# Container tools
+docker
+podman
+buildah
+
+# Development frameworks
+qt5-base
+gtk3
+sdl2
+
+# Network development
+openssl
+curl
+wget
+nmap
+wireshark-cli
+
+# Build systems
+ninja
+meson
+bazel

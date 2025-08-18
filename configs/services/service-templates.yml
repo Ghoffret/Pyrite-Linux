@@ -1,0 +1,236 @@
+# Pyrite Linux Service Configuration Templates
+
+# Web Server Services
+web_servers:
+  nginx:
+    package: nginx
+    config_file: /etc/nginx/nginx.conf
+    default_config: |
+      user http;
+      worker_processes auto;
+      worker_cpu_affinity auto;
+      
+      events {
+          multi_accept on;
+          worker_connections 1024;
+      }
+      
+      http {
+          charset utf-8;
+          sendfile on;
+          tcp_nopush on;
+          tcp_nodelay on;
+          server_tokens off;
+          log_not_found off;
+          types_hash_max_size 4096;
+          client_max_body_size 16M;
+          
+          # MIME
+          include mime.types;
+          default_type application/octet-stream;
+          
+          # Logging
+          access_log /var/log/nginx/access.log;
+          error_log /var/log/nginx/error.log warn;
+          
+          # Gzip
+          gzip on;
+          gzip_vary on;
+          gzip_proxied any;
+          gzip_comp_level 6;
+          gzip_types text/plain text/css text/xml application/json application/javascript application/xml+rss application/atom+xml image/svg+xml;
+          
+          # Default server
+          server {
+              listen 80 default_server;
+              listen [::]:80 default_server;
+              server_name _;
+              root /usr/share/nginx/html;
+              index index.html;
+          }
+      }
+    
+  apache:
+    package: apache
+    config_file: /etc/httpd/conf/httpd.conf
+    modules:
+      - mod_rewrite
+      - mod_ssl
+      - mod_deflate
+
+# Database Services
+databases:
+  mariadb:
+    package: mariadb
+    config_file: /etc/my.cnf.d/server.cnf
+    default_config: |
+      [mysqld]
+      innodb_buffer_pool_size = 512M
+      max_connections = 200
+      innodb_log_file_size = 256M
+      innodb_flush_log_at_trx_commit = 2
+      innodb_file_per_table = 1
+      query_cache_type = 1
+      query_cache_size = 64M
+      tmp_table_size = 64M
+      max_heap_table_size = 64M
+      
+  postgresql:
+    package: postgresql
+    config_file: /var/lib/postgres/data/postgresql.conf
+    init_command: |
+      sudo -u postgres initdb -D /var/lib/postgres/data
+    
+  redis:
+    package: redis
+    config_file: /etc/redis/redis.conf
+    default_config: |
+      bind 127.0.0.1
+      port 6379
+      timeout 0
+      tcp-keepalive 300
+      save 900 1
+      save 300 10
+      save 60 10000
+      maxmemory 256mb
+      maxmemory-policy allkeys-lru
+
+# Security Services
+security:
+  fail2ban:
+    package: fail2ban
+    config_file: /etc/fail2ban/jail.local
+    default_config: |
+      [DEFAULT]
+      bantime = 3600
+      findtime = 600
+      maxretry = 5
+      backend = systemd
+      
+      [sshd]
+      enabled = true
+      port = ssh
+      logpath = %(sshd_log)s
+      backend = %(sshd_backend)s
+      
+  ufw:
+    package: ufw
+    default_rules:
+      - ufw default deny incoming
+      - ufw default allow outgoing
+      - ufw allow ssh
+
+# Monitoring Services
+monitoring:
+  prometheus:
+    package: prometheus
+    config_file: /etc/prometheus/prometheus.yml
+    default_config: |
+      global:
+        scrape_interval: 15s
+        evaluation_interval: 15s
+      
+      scrape_configs:
+        - job_name: 'prometheus'
+          static_configs:
+            - targets: ['localhost:9090']
+        
+        - job_name: 'node'
+          static_configs:
+            - targets: ['localhost:9100']
+  
+  grafana:
+    package: grafana
+    config_file: /etc/grafana/grafana.ini
+    default_port: 3000
+
+# Container Services
+containers:
+  docker:
+    package: docker
+    service: docker
+    config_file: /etc/docker/daemon.json
+    default_config: |
+      {
+        "log-driver": "json-file",
+        "log-opts": {
+          "max-size": "10m",
+          "max-file": "3"
+        },
+        "storage-driver": "overlay2",
+        "live-restore": true
+      }
+    
+  podman:
+    package: podman
+    rootless: true
+
+# Network Services
+network:
+  samba:
+    package: samba
+    config_file: /etc/samba/smb.conf
+    default_config: |
+      [global]
+      workgroup = WORKGROUP
+      server string = Pyrite Linux Samba Server
+      netbios name = pyrite
+      security = user
+      map to guest = bad user
+      dns proxy = no
+      
+  nfs:
+    package: nfs-utils
+    exports_file: /etc/exports
+    services:
+      - nfs-server
+      - nfs-client.target
+
+# Backup Services
+backup:
+  borgbackup:
+    package: borgbackup
+    config_template: |
+      #!/bin/bash
+      export BORG_REPO="/backup/borg-repo"
+      export BORG_PASSPHRASE="your-secure-passphrase"
+      
+      borg create --stats --progress \
+        ::'{hostname}-{now:%Y-%m-%d_%H:%M:%S}' \
+        /etc /home /var/log
+      
+      borg prune --keep-daily=7 --keep-weekly=4 --keep-monthly=6
+  
+  rsync:
+    package: rsync
+    systemd_service: |
+      [Unit]
+      Description=Rsync Backup
+      After=network.target
+      
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/bin/rsync -av --delete /home/ /backup/home/
+      
+      [Install]
+      WantedBy=multi-user.target
+
+# System Services
+system:
+  networkmanager:
+    package: networkmanager
+    config_file: /etc/NetworkManager/NetworkManager.conf
+    
+  systemd-timesyncd:
+    config_file: /etc/systemd/timesyncd.conf
+    default_config: |
+      [Time]
+      NTP=0.arch.pool.ntp.org 1.arch.pool.ntp.org 2.arch.pool.ntp.org 3.arch.pool.ntp.org
+      FallbackNTP=0.pool.ntp.org 1.pool.ntp.org
+      
+  cron:
+    package: cronie
+    service: cronie
+    user_crontab: |
+      # Example user crontab
+      0 2 * * * /usr/local/bin/pyrite-backup create-auto

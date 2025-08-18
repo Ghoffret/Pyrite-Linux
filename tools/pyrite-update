@@ -1,0 +1,411 @@
+#!/bin/bash
+
+#############################################################################
+#                                                                           #
+#                         Pyrite Update Manager                            #
+#                                                                           #
+#     System update manager with Btrfs snapshot integration               #
+#                                                                           #
+#############################################################################
+
+set -euo pipefail
+
+# Color codes for output
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly NC='\033[0m' # No Color
+
+# Configuration
+readonly SNAPSHOT_DIR="/.snapshots"
+readonly LOG_FILE="/var/log/pyrite-update.log"
+readonly MAX_SNAPSHOTS=10
+
+print_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+    log "INFO: $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+    log "SUCCESS: $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+    log "WARNING: $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+    log "ERROR: $1"
+}
+
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+}
+
+confirm() {
+    local prompt="$1"
+    local default="${2:-n}"
+    local response
+    
+    if [[ "$default" == "y" ]]; then
+        read -r -p "$prompt [Y/n]: " response
+        response=${response:-y}
+    else
+        read -r -p "$prompt [y/N]: " response
+        response=${response:-n}
+    fi
+    
+    [[ "$response" =~ ^[Yy]$ ]]
+}
+
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        print_error "This command must be run as root"
+        exit 1
+    fi
+}
+
+create_pre_update_snapshot() {
+    local snapshot_name="pre-update-$(date +%Y%m%d-%H%M%S)"
+    
+    print_info "Creating pre-update snapshot: $snapshot_name"
+    
+    if btrfs subvolume snapshot / "${SNAPSHOT_DIR}/${snapshot_name}" &>/dev/null; then
+        print_success "Pre-update snapshot created: $snapshot_name"
+        echo "$snapshot_name" > /tmp/pyrite-update-snapshot
+        return 0
+    else
+        print_error "Failed to create pre-update snapshot"
+        return 1
+    fi
+}
+
+cleanup_old_snapshots() {
+    print_info "Cleaning up old snapshots..."
+    
+    local snapshots
+    mapfile -t snapshots < <(find "$SNAPSHOT_DIR" -maxdepth 1 -name "pre-update-*" -type d | sort)
+    
+    local count=${#snapshots[@]}
+    if [[ $count -gt $MAX_SNAPSHOTS ]]; then
+        local to_remove=$((count - MAX_SNAPSHOTS))
+        print_info "Removing $to_remove old snapshots (keeping $MAX_SNAPSHOTS)"
+        
+        for ((i=0; i<to_remove; i++)); do
+            local snapshot="${snapshots[i]}"
+            print_info "Removing old snapshot: $(basename "$snapshot")"
+            if btrfs subvolume delete "$snapshot" &>/dev/null; then
+                print_success "Removed: $(basename "$snapshot")"
+            else
+                print_warning "Failed to remove: $(basename "$snapshot")"
+            fi
+        done
+    else
+        print_info "Snapshot count ($count) within limit ($MAX_SNAPSHOTS)"
+    fi
+}
+
+update_pacman_mirrors() {
+    print_info "Updating pacman mirrors..."
+    
+    if command -v reflector &>/dev/null; then
+        print_info "Using reflector to update mirrors..."
+        if reflector --latest 20 --protocol https --sort rate --save /etc/pacman.d/mirrorlist; then
+            print_success "Mirrors updated successfully"
+        else
+            print_warning "Failed to update mirrors with reflector"
+        fi
+    else
+        print_warning "Reflector not available, skipping mirror update"
+    fi
+}
+
+check_updates() {
+    print_info "Checking for available updates..."
+    
+    # Update package database
+    if pacman -Sy &>/dev/null; then
+        print_success "Package database updated"
+    else
+        print_error "Failed to update package database"
+        return 1
+    fi
+    
+    # Check for updates
+    local updates
+    updates=$(pacman -Qu 2>/dev/null | wc -l)
+    
+    if [[ $updates -gt 0 ]]; then
+        print_info "$updates package(s) available for update"
+        pacman -Qu
+        return 0
+    else
+        print_success "System is up to date"
+        return 1
+    fi
+}
+
+perform_system_update() {
+    print_info "Performing system update..."
+    
+    # Show what will be updated
+    pacman -Qu
+    echo
+    
+    if ! confirm "Proceed with system update?" "y"; then
+        print_info "Update cancelled by user"
+        return 1
+    fi
+    
+    # Perform the update
+    if pacman -Su --noconfirm; then
+        print_success "System update completed successfully"
+        return 0
+    else
+        print_error "System update failed"
+        return 1
+    fi
+}
+
+update_aur_packages() {
+    if command -v yay &>/dev/null; then
+        print_info "Checking for AUR package updates..."
+        
+        # Switch to a regular user for AUR operations
+        local regular_user
+        regular_user=$(getent passwd | awk -F: '$3 >= 1000 && $3 < 65534 {print $1; exit}')
+        
+        if [[ -n "$regular_user" ]]; then
+            print_info "Updating AUR packages as user: $regular_user"
+            if sudo -u "$regular_user" yay -Sua --noconfirm; then
+                print_success "AUR packages updated successfully"
+            else
+                print_warning "AUR package update encountered issues"
+            fi
+        else
+            print_warning "No regular user found for AUR updates"
+        fi
+    else
+        print_info "AUR helper not installed, skipping AUR updates"
+    fi
+}
+
+update_flatpak_packages() {
+    if command -v flatpak &>/dev/null; then
+        print_info "Updating Flatpak packages..."
+        
+        if flatpak update -y &>/dev/null; then
+            print_success "Flatpak packages updated successfully"
+        else
+            print_warning "Flatpak update encountered issues"
+        fi
+    else
+        print_info "Flatpak not installed, skipping Flatpak updates"
+    fi
+}
+
+post_update_tasks() {
+    print_info "Performing post-update tasks..."
+    
+    # Update locate database if available
+    if command -v updatedb &>/dev/null; then
+        print_info "Updating locate database..."
+        updatedb &
+    fi
+    
+    # Update man database
+    if command -v mandb &>/dev/null; then
+        print_info "Updating man database..."
+        mandb -q &
+    fi
+    
+    # Clean package cache
+    print_info "Cleaning package cache..."
+    if pacman -Sc --noconfirm &>/dev/null; then
+        print_success "Package cache cleaned"
+    fi
+    
+    wait # Wait for background tasks
+}
+
+rollback_update() {
+    if [[ ! -f /tmp/pyrite-update-snapshot ]]; then
+        print_error "No pre-update snapshot found for rollback"
+        exit 1
+    fi
+    
+    local snapshot_name
+    snapshot_name=$(cat /tmp/pyrite-update-snapshot)
+    local snapshot_path="${SNAPSHOT_DIR}/${snapshot_name}"
+    
+    if [[ ! -d "$snapshot_path" ]]; then
+        print_error "Snapshot not found: $snapshot_path"
+        exit 1
+    fi
+    
+    print_warning "This will rollback your system to the pre-update state"
+    print_warning "Snapshot: $snapshot_name"
+    echo
+    
+    if ! confirm "Are you sure you want to rollback?" "n"; then
+        print_info "Rollback cancelled"
+        exit 0
+    fi
+    
+    print_info "Rolling back to snapshot: $snapshot_name"
+    
+    # Create a snapshot of current state before rollback
+    local current_snapshot="pre-rollback-$(date +%Y%m%d-%H%M%S)"
+    if btrfs subvolume snapshot / "${SNAPSHOT_DIR}/${current_snapshot}" &>/dev/null; then
+        print_success "Current state saved as: $current_snapshot"
+    fi
+    
+    # Perform rollback (this is a simplified approach)
+    print_error "Rollback functionality requires manual intervention"
+    print_info "To manually rollback:"
+    print_info "1. Boot from live USB"
+    print_info "2. Mount the Btrfs filesystem"
+    print_info "3. Move current @ subvolume to @.broken"
+    print_info "4. Create new @ subvolume from snapshot: $snapshot_path"
+    print_info "5. Reboot"
+}
+
+show_help() {
+    echo "Pyrite Update Manager - System update with Btrfs snapshots"
+    echo
+    echo "Usage: pyrite-update [OPTION]"
+    echo
+    echo "Options:"
+    echo "  -h, --help        Show this help message"
+    echo "  -c, --check       Check for available updates only"
+    echo "  -u, --update      Perform full system update"
+    echo "  -m, --mirrors     Update pacman mirrors only"
+    echo "  -r, --rollback    Rollback last update"
+    echo "  -s, --snapshot    Create manual snapshot before update"
+    echo "  -a, --aur         Update AUR packages only"
+    echo "  -f, --flatpak     Update Flatpak packages only"
+    echo
+    echo "Examples:"
+    echo "  pyrite-update -c              # Check for updates"
+    echo "  pyrite-update -u              # Full system update"
+    echo "  pyrite-update -m              # Update mirrors only"
+    echo "  pyrite-update -r              # Rollback last update"
+}
+
+main() {
+    # Parse command line arguments
+    case "${1:-}" in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        -c|--check)
+            check_updates
+            exit $?
+            ;;
+        -u|--update)
+            check_root
+            
+            # Create pre-update snapshot
+            if ! create_pre_update_snapshot; then
+                print_error "Failed to create pre-update snapshot"
+                exit 1
+            fi
+            
+            # Update mirrors
+            update_pacman_mirrors
+            
+            # Check for updates
+            if check_updates; then
+                # Perform updates
+                if perform_system_update; then
+                    update_aur_packages
+                    update_flatpak_packages
+                    post_update_tasks
+                    cleanup_old_snapshots
+                    
+                    print_success "System update completed successfully!"
+                    print_info "Pre-update snapshot available for rollback if needed"
+                else
+                    print_error "System update failed!"
+                    print_info "Pre-update snapshot available for rollback"
+                    exit 1
+                fi
+            fi
+            ;;
+        -m|--mirrors)
+            check_root
+            update_pacman_mirrors
+            ;;
+        -r|--rollback)
+            check_root
+            rollback_update
+            ;;
+        -s|--snapshot)
+            check_root
+            create_pre_update_snapshot
+            ;;
+        -a|--aur)
+            update_aur_packages
+            ;;
+        -f|--flatpak)
+            update_flatpak_packages
+            ;;
+        "")
+            # Interactive mode
+            check_root
+            
+            echo -e "${BLUE}"
+            echo "████████████████████████████████████████████████████████████████"
+            echo "██                                                            ██"
+            echo "██                  Pyrite Update Manager                     ██"
+            echo "██                                                            ██"
+            echo "████████████████████████████████████████████████████████████████"
+            echo -e "${NC}"
+            echo
+            
+            print_info "Starting interactive update process..."
+            
+            # Check for updates first
+            if check_updates; then
+                echo
+                if confirm "Create pre-update snapshot and proceed with update?" "y"; then
+                    if create_pre_update_snapshot; then
+                        update_pacman_mirrors
+                        
+                        if perform_system_update; then
+                            update_aur_packages
+                            update_flatpak_packages
+                            post_update_tasks
+                            cleanup_old_snapshots
+                            
+                            print_success "System update completed successfully!"
+                        else
+                            print_error "System update failed!"
+                            exit 1
+                        fi
+                    else
+                        print_error "Failed to create snapshot, aborting update"
+                        exit 1
+                    fi
+                else
+                    print_info "Update cancelled by user"
+                fi
+            fi
+            ;;
+        *)
+            print_error "Unknown option: $1"
+            show_help
+            exit 1
+            ;;
+    esac
+}
+
+# Script entry point
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

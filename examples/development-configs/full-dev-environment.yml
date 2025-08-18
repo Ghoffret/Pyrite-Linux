@@ -1,0 +1,158 @@
+# Pyrite Linux Development Configuration Template
+# Full Development Environment
+
+# Install required packages
+packages:
+  # Core development
+  - base-devel
+  - git
+  - vim
+  - neovim
+  - code
+  
+  # Programming languages
+  - python
+  - python-pip
+  - nodejs
+  - npm
+  - rust
+  - go
+  - java-openjdk
+  
+  # Build tools
+  - cmake
+  - make
+  - ninja
+  - meson
+  
+  # Debugging tools
+  - gdb
+  - valgrind
+  - strace
+  - perf
+  
+  # Container tools
+  - docker
+  - podman
+  - docker-compose
+
+# System configuration
+services:
+  enable:
+    - docker
+    - sshd
+  user_groups:
+    - docker
+    - wheel
+
+# Development tools configuration
+development:
+  git:
+    auto_setup: true
+    default_editor: vim
+  
+  docker:
+    enable_user: true
+    enable_buildkit: true
+  
+  nodejs:
+    global_packages:
+      - typescript
+      - eslint
+      - prettier
+      - @vue/cli
+      - create-react-app
+  
+  python:
+    pip_packages:
+      - virtualenv
+      - pipenv
+      - black
+      - flake8
+      - pytest
+      - jupyter
+  
+  rust:
+    components:
+      - rustfmt
+      - clippy
+      - rust-analyzer
+
+# IDE/Editor configuration
+editors:
+  vscode:
+    extensions:
+      - ms-python.python
+      - rust-lang.rust-analyzer
+      - bradlc.vscode-tailwindcss
+      - esbenp.prettier-vscode
+      - ms-vscode.vscode-typescript-next
+  
+  vim:
+    plugins:
+      - vim-plug
+      - nerdtree
+      - airline
+      - syntastic
+
+# Database tools
+databases:
+  packages:
+    - postgresql-libs
+    - sqlite
+    - redis
+  tools:
+    - pgadmin4
+    - sqlite-browser
+
+# Network development
+network:
+  tools:
+    - wireshark-cli
+    - nmap
+    - curl
+    - wget
+    - httpie
+  
+# Performance tools
+performance:
+  packages:
+    - htop
+    - iotop
+    - nethogs
+    - bandwhich
+    - hyperfine
+
+# Documentation tools
+documentation:
+  packages:
+    - pandoc
+    - texlive-core
+    - graphviz
+    - plantuml
+
+# Version control
+vcs:
+  git:
+    global_config:
+      user.name: "Developer Name"
+      user.email: "developer@example.com"
+      init.defaultBranch: main
+      pull.rebase: true
+      
+# SSH configuration
+ssh:
+  generate_key: true
+  key_type: ed25519
+  config_file: true
+
+# Shell configuration
+shell:
+  default: bash
+  enhancements:
+    - bash-completion
+    - fzf
+    - ripgrep
+    - fd
+    - bat
+    - exa
