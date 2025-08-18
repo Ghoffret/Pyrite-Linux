@@ -1,0 +1,76 @@
+# Pyrite Linux Server Configuration Template
+# NGINX Web Server with PHP-FPM
+
+# Install required packages
+packages:
+  - nginx
+  - php-fpm
+  - mariadb
+  - redis
+  - fail2ban
+  - certbot
+
+# System configuration
+services:
+  enable:
+    - nginx
+    - php-fpm
+    - mariadb
+    - redis
+    - fail2ban
+  disable:
+    - apache2
+
+# Firewall rules
+firewall:
+  allow:
+    - ssh
+    - http
+    - https
+  rate_limit:
+    - ssh: 6/min
+
+# PHP-FPM configuration
+php:
+  memory_limit: 256M
+  max_execution_time: 300
+  upload_max_filesize: 64M
+
+# NGINX configuration
+nginx:
+  worker_processes: auto
+  client_max_body_size: 64M
+  gzip: on
+  
+# Database configuration
+database:
+  mysql:
+    innodb_buffer_pool_size: 512M
+    max_connections: 200
+
+# SSL configuration
+ssl:
+  auto_cert: true
+  email: admin@example.com
+  domains:
+    - example.com
+    - www.example.com
+
+# Backup configuration
+backup:
+  enabled: true
+  schedule: daily
+  retention: 30
+  include:
+    - /etc
+    - /var/www
+    - /var/lib/mysql
+
+# Monitoring
+monitoring:
+  enabled: true
+  tools:
+    - htop
+    - iotop
+    - nethogs
+    - fail2ban
