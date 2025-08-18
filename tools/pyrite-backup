@@ -1,0 +1,389 @@
+#!/bin/bash
+
+#############################################################################
+#                                                                           #
+#                        Pyrite Backup Manager                             #
+#                                                                           #
+#     Btrfs snapshot and backup manager for Pyrite Linux                  #
+#                                                                           #
+#############################################################################
+
+set -euo pipefail
+
+# Color codes for output
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly NC='\033[0m' # No Color
+
+# Configuration
+readonly SNAPSHOT_DIR="/.snapshots"
+readonly BACKUP_CONFIG="/etc/pyrite/backup.conf"
+readonly MAX_SNAPSHOTS=20
+
+print_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+confirm() {
+    local prompt="$1"
+    local default="${2:-n}"
+    local response
+    
+    if [[ "$default" == "y" ]]; then
+        read -r -p "$prompt [Y/n]: " response
+        response=${response:-y}
+    else
+        read -r -p "$prompt [y/N]: " response
+        response=${response:-n}
+    fi
+    
+    [[ "$response" =~ ^[Yy]$ ]]
+}
+
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        print_error "This command must be run as root"
+        exit 1
+    fi
+}
+
+create_snapshot() {
+    local name="$1"
+    local description="${2:-Manual snapshot}"
+    
+    # Generate snapshot name with timestamp if not provided
+    if [[ -z "$name" ]]; then
+        name="manual-$(date +%Y%m%d-%H%M%S)"
+    fi
+    
+    local snapshot_path="${SNAPSHOT_DIR}/${name}"
+    
+    print_info "Creating snapshot: $name"
+    
+    # Create snapshots directory if it doesn't exist
+    if [[ ! -d "$SNAPSHOT_DIR" ]]; then
+        mkdir -p "$SNAPSHOT_DIR"
+        btrfs subvolume create "$SNAPSHOT_DIR" 2>/dev/null || true
+    fi
+    
+    # Create the snapshot
+    if btrfs subvolume snapshot / "$snapshot_path"; then
+        print_success "Snapshot created: $name"
+        
+        # Save metadata
+        cat > "${snapshot_path}/.snapshot-info" << EOF
+name=$name
+description=$description
+created=$(date -Iseconds)
+size=$(du -sh "$snapshot_path" | cut -f1)
+EOF
+        return 0
+    else
+        print_error "Failed to create snapshot: $name"
+        return 1
+    fi
+}
+
+list_snapshots() {
+    print_info "Available snapshots:"
+    
+    if [[ ! -d "$SNAPSHOT_DIR" ]]; then
+        print_warning "No snapshots directory found"
+        return 1
+    fi
+    
+    echo "Name                     Created                  Size    Description"
+    echo "=================================================================="
+    
+    for snapshot in "$SNAPSHOT_DIR"/*/; do
+        if [[ -d "$snapshot" ]]; then
+            local name
+            name=$(basename "$snapshot")
+            local info_file="${snapshot}/.snapshot-info"
+            
+            if [[ -f "$info_file" ]]; then
+                source "$info_file"
+                printf "%-24s %-20s %-8s %s\n" "$name" "${created:-Unknown}" "${size:-Unknown}" "${description:-No description}"
+            else
+                local created_time
+                created_time=$(stat -c %y "$snapshot" 2>/dev/null | cut -d. -f1 || echo "Unknown")
+                local size
+                size=$(du -sh "$snapshot" 2>/dev/null | cut -f1 || echo "Unknown")
+                printf "%-24s %-20s %-8s %s\n" "$name" "$created_time" "$size" "Legacy snapshot"
+            fi
+        fi
+    done
+}
+
+delete_snapshot() {
+    local name="$1"
+    local snapshot_path="${SNAPSHOT_DIR}/${name}"
+    
+    if [[ ! -d "$snapshot_path" ]]; then
+        print_error "Snapshot not found: $name"
+        return 1
+    fi
+    
+    print_warning "This will permanently delete the snapshot: $name"
+    if confirm "Are you sure?"; then
+        if btrfs subvolume delete "$snapshot_path"; then
+            print_success "Snapshot deleted: $name"
+        else
+            print_error "Failed to delete snapshot: $name"
+            return 1
+        fi
+    else
+        print_info "Deletion cancelled"
+    fi
+}
+
+cleanup_old_snapshots() {
+    print_info "Cleaning up old snapshots..."
+    
+    local snapshots
+    mapfile -t snapshots < <(find "$SNAPSHOT_DIR" -maxdepth 1 -type d -name "*" | grep -v "^${SNAPSHOT_DIR}$" | sort)
+    
+    local count=${#snapshots[@]}
+    if [[ $count -gt $MAX_SNAPSHOTS ]]; then
+        local to_remove=$((count - MAX_SNAPSHOTS))
+        print_info "Found $count snapshots, removing $to_remove oldest ones (keeping $MAX_SNAPSHOTS)"
+        
+        for ((i=0; i<to_remove; i++)); do
+            local snapshot="${snapshots[i]}"
+            local name
+            name=$(basename "$snapshot")
+            print_info "Removing old snapshot: $name"
+            
+            if btrfs subvolume delete "$snapshot" &>/dev/null; then
+                print_success "Removed: $name"
+            else
+                print_warning "Failed to remove: $name"
+            fi
+        done
+    else
+        print_info "Snapshot count ($count) within limit ($MAX_SNAPSHOTS)"
+    fi
+}
+
+snapshot_info() {
+    local name="$1"
+    local snapshot_path="${SNAPSHOT_DIR}/${name}"
+    
+    if [[ ! -d "$snapshot_path" ]]; then
+        print_error "Snapshot not found: $name"
+        return 1
+    fi
+    
+    print_info "Snapshot information: $name"
+    echo "=============================="
+    
+    local info_file="${snapshot_path}/.snapshot-info"
+    if [[ -f "$info_file" ]]; then
+        source "$info_file"
+        echo "Name: $name"
+        echo "Description: ${description:-No description}"
+        echo "Created: ${created:-Unknown}"
+        echo "Size: ${size:-Unknown}"
+    else
+        echo "Name: $name"
+        echo "Created: $(stat -c %y "$snapshot_path" 2>/dev/null | cut -d. -f1 || echo "Unknown")"
+        echo "Size: $(du -sh "$snapshot_path" 2>/dev/null | cut -f1 || echo "Unknown")"
+    fi
+    
+    echo "Path: $snapshot_path"
+    echo "Subvolume ID: $(btrfs subvolume show "$snapshot_path" | grep "Subvolume ID" | awk '{print $3}' 2>/dev/null || echo "Unknown")"
+}
+
+compare_snapshots() {
+    local snap1="$1"
+    local snap2="$2"
+    
+    local path1="${SNAPSHOT_DIR}/${snap1}"
+    local path2="${SNAPSHOT_DIR}/${snap2}"
+    
+    if [[ ! -d "$path1" ]]; then
+        print_error "Snapshot not found: $snap1"
+        return 1
+    fi
+    
+    if [[ ! -d "$path2" ]]; then
+        print_error "Snapshot not found: $snap2"
+        return 1
+    fi
+    
+    print_info "Comparing snapshots: $snap1 vs $snap2"
+    
+    # Simple file comparison
+    echo "Files added in $snap2:"
+    find "$path2" -type f -newer "$path1" 2>/dev/null | head -20
+    
+    echo
+    echo "Files modified in $snap2:"
+    find "$path2" -type f -cnewer "$path1" 2>/dev/null | head -20
+}
+
+create_backup_schedule() {
+    check_root
+    print_info "Setting up automatic snapshot schedule..."
+    
+    local schedule_file="/etc/systemd/system/pyrite-snapshot.timer"
+    local service_file="/etc/systemd/system/pyrite-snapshot.service"
+    
+    # Create systemd service
+    cat > "$service_file" << 'EOF'
+[Unit]
+Description=Pyrite Automatic Snapshot
+Wants=pyrite-snapshot.timer
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/pyrite-backup create-auto
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    # Create systemd timer
+    read -r -p "Snapshot frequency (daily/weekly) [daily]: " frequency
+    frequency=${frequency:-daily}
+    
+    local on_calendar
+    case "$frequency" in
+        "daily")
+            on_calendar="daily"
+            ;;
+        "weekly")
+            on_calendar="weekly"
+            ;;
+        *)
+            on_calendar="daily"
+            ;;
+    esac
+    
+    cat > "$schedule_file" << EOF
+[Unit]
+Description=Pyrite Automatic Snapshot Timer
+Requires=pyrite-snapshot.service
+
+[Timer]
+OnCalendar=$on_calendar
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+    
+    # Reload systemd and enable timer
+    systemctl daemon-reload
+    systemctl enable pyrite-snapshot.timer
+    systemctl start pyrite-snapshot.timer
+    
+    print_success "Automatic snapshot schedule enabled ($frequency)"
+}
+
+show_help() {
+    echo "Pyrite Backup Manager - Btrfs snapshot and backup management"
+    echo
+    echo "Usage: pyrite-backup [COMMAND] [OPTIONS]"
+    echo
+    echo "Commands:"
+    echo "  create [NAME] [DESC]   Create a new snapshot"
+    echo "  create-auto            Create automatic snapshot"
+    echo "  list                   List all snapshots"
+    echo "  delete NAME            Delete a snapshot"
+    echo "  info NAME              Show snapshot information"
+    echo "  cleanup                Remove old snapshots"
+    echo "  compare SNAP1 SNAP2    Compare two snapshots"
+    echo "  schedule               Set up automatic snapshots"
+    echo
+    echo "Options:"
+    echo "  -h, --help            Show this help message"
+    echo
+    echo "Examples:"
+    echo "  pyrite-backup create                     # Create snapshot with auto name"
+    echo "  pyrite-backup create pre-update          # Create named snapshot"
+    echo "  pyrite-backup delete old-snapshot        # Delete specific snapshot"
+    echo "  pyrite-backup compare snap1 snap2        # Compare snapshots"
+}
+
+main() {
+    case "${1:-}" in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        create)
+            check_root
+            create_snapshot "${2:-}" "${3:-Manual snapshot}"
+            ;;
+        create-auto)
+            check_root
+            create_snapshot "auto-$(date +%Y%m%d-%H%M%S)" "Automatic snapshot"
+            cleanup_old_snapshots
+            ;;
+        list)
+            list_snapshots
+            ;;
+        delete)
+            if [[ -n "${2:-}" ]]; then
+                check_root
+                delete_snapshot "$2"
+            else
+                print_error "Snapshot name required"
+                exit 1
+            fi
+            ;;
+        info)
+            if [[ -n "${2:-}" ]]; then
+                snapshot_info "$2"
+            else
+                print_error "Snapshot name required"
+                exit 1
+            fi
+            ;;
+        cleanup)
+            check_root
+            cleanup_old_snapshots
+            ;;
+        compare)
+            if [[ -n "${2:-}" && -n "${3:-}" ]]; then
+                compare_snapshots "$2" "$3"
+            else
+                print_error "Two snapshot names required"
+                exit 1
+            fi
+            ;;
+        schedule)
+            create_backup_schedule
+            ;;
+        "")
+            # Interactive mode
+            list_snapshots
+            ;;
+        *)
+            print_error "Unknown command: $1"
+            show_help
+            exit 1
+            ;;
+    esac
+}
+
+# Script entry point
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

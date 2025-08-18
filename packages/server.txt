@@ -1,0 +1,78 @@
+# Pyrite Linux - Server Package List
+# Server-oriented packages and services
+
+# Web servers
+nginx
+apache
+lighttpd
+
+# Database servers
+mariadb
+postgresql
+redis
+mongodb
+
+# Monitoring and logging
+prometheus
+grafana
+logrotate
+rsyslog
+journald
+
+# Security and firewall
+ufw
+fail2ban
+iptables
+nftables
+certbot
+
+# Backup and synchronization
+rsync
+rclone
+borgbackup
+duplicity
+
+# Virtualization
+qemu
+libvirt
+virt-manager
+lxc
+
+# Container orchestration
+kubernetes
+docker-compose
+podman-compose
+
+# Network services
+bind
+dnsmasq
+dhcp
+nfs-utils
+samba
+
+# System administration
+ansible
+terraform
+helm
+kubectl
+
+# Performance monitoring
+iotop
+iftop
+nethogs
+atop
+sysstat
+
+# Mail services
+postfix
+dovecot
+spamassassin
+
+# Proxy and load balancing
+haproxy
+squid
+varnish
+
+# SSL/TLS
+openssl
+gnutls

@@ -1,0 +1,91 @@
+# Pyrite Linux - Desktop Package List
+# Basic desktop environment packages
+
+# Display server
+xorg-server
+xorg-xinit
+xorg-xrandr
+xorg-xsetroot
+wayland
+weston
+
+# Window managers (lightweight options)
+i3-wm
+sway
+dwm
+awesome
+openbox
+
+# Desktop environments (minimal)
+lxde
+lxqt
+xfce4
+
+# Display managers
+lightdm
+lightdm-gtk-greeter
+sddm
+
+# Audio
+pipewire
+pipewire-pulse
+pipewire-alsa
+pipewire-jack
+wireplumber
+alsa-utils
+pavucontrol
+
+# Graphics drivers (basic)
+mesa
+vulkan-radeon
+vulkan-intel
+nvidia-open
+
+# Fonts
+ttf-dejavu
+ttf-liberation
+noto-fonts
+noto-fonts-emoji
+
+# Basic applications
+firefox
+thunderbird
+libreoffice-still
+gimp
+vlc
+mpv
+
+# File managers
+thunar
+pcmanfm
+ranger
+
+# Terminal emulators
+alacritty
+kitty
+xterm
+
+# System utilities
+gparted
+bleachbit
+filelight
+
+# Network tools
+networkmanager-applet
+bluez
+bluez-utils
+
+# Multimedia codecs
+gstreamer
+ffmpeg
+imagemagick
+
+# Archive tools
+file-roller
+p7zip
+unrar
+
+# Flatpak support
+flatpak
+xdg-desktop-portal
+xdg-desktop-portal-gtk

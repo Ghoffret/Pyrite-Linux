@@ -1,0 +1,359 @@
+#!/bin/bash
+
+#############################################################################
+#                                                                           #
+#                         Pyrite Log Analyzer                             #
+#                                                                           #
+#     System log analyzer for common issues and troubleshooting            #
+#                                                                           #
+#############################################################################
+
+set -euo pipefail
+
+# Color codes for output
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly NC='\033[0m' # No Color
+
+print_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+show_boot_logs() {
+    local lines="${1:-50}"
+    print_info "Boot logs (last $lines lines):"
+    journalctl -b --no-pager -n "$lines"
+}
+
+show_kernel_logs() {
+    local lines="${1:-50}"
+    print_info "Kernel logs (last $lines lines):"
+    journalctl -k --no-pager -n "$lines"
+}
+
+show_system_errors() {
+    local since="${1:-1 hour ago}"
+    print_info "System errors since $since:"
+    journalctl -p err --since "$since" --no-pager
+}
+
+show_failed_services() {
+    print_info "Failed services:"
+    systemctl list-units --failed --no-pager
+    
+    echo
+    print_info "Failed service details:"
+    systemctl list-units --failed --no-legend | while read -r unit _; do
+        if [[ -n "$unit" ]]; then
+            echo -e "\n${BLUE}=== $unit ===${NC}"
+            journalctl -u "$unit" --no-pager -n 20
+        fi
+    done
+}
+
+analyze_disk_usage() {
+    print_info "Disk usage analysis:"
+    
+    echo "Filesystem usage:"
+    df -h
+    
+    echo
+    echo "Largest directories in /:"
+    du -sh /* 2>/dev/null | sort -hr | head -10
+    
+    echo
+    echo "Log file sizes:"
+    find /var/log -type f -exec du -sh {} \; 2>/dev/null | sort -hr | head -10
+}
+
+analyze_memory_usage() {
+    print_info "Memory usage analysis:"
+    
+    echo "Current memory usage:"
+    free -h
+    
+    echo
+    echo "Top memory-consuming processes:"
+    ps aux --sort=-%mem | head -11
+    
+    echo
+    echo "Memory-related errors in logs:"
+    journalctl --since "1 day ago" | grep -i "memory\|oom\|killed" | tail -10
+}
+
+analyze_network_issues() {
+    print_info "Network analysis:"
+    
+    echo "Network interfaces:"
+    ip link show
+    
+    echo
+    echo "Network addresses:"
+    ip addr show
+    
+    echo
+    echo "Network routes:"
+    ip route show
+    
+    echo
+    echo "DNS configuration:"
+    cat /etc/resolv.conf 2>/dev/null || echo "No resolv.conf found"
+    
+    echo
+    echo "Recent network errors:"
+    journalctl --since "1 hour ago" | grep -i "network\|dhcp\|dns" | tail -10
+}
+
+analyze_boot_performance() {
+    print_info "Boot performance analysis:"
+    
+    if command -v systemd-analyze &>/dev/null; then
+        echo "Boot time:"
+        systemd-analyze
+        
+        echo
+        echo "Critical chain:"
+        systemd-analyze critical-chain
+        
+        echo
+        echo "Slowest services:"
+        systemd-analyze blame | head -10
+    else
+        print_warning "systemd-analyze not available"
+    fi
+}
+
+search_logs() {
+    local pattern="$1"
+    local since="${2:-1 day ago}"
+    
+    print_info "Searching logs for pattern: $pattern (since $since)"
+    journalctl --since "$since" | grep -i "$pattern" | tail -20
+}
+
+show_hardware_errors() {
+    print_info "Hardware-related errors:"
+    
+    echo "Hard drive errors:"
+    journalctl --since "1 day ago" | grep -i "ata\|sata\|nvme\|hard\|disk" | grep -i "error\|fail" | tail -10
+    
+    echo
+    echo "Memory errors:"
+    journalctl --since "1 day ago" | grep -i "memory\|ecc\|corrected" | tail -5
+    
+    echo
+    echo "Temperature warnings:"
+    journalctl --since "1 day ago" | grep -i "temperature\|thermal\|overheat" | tail -5
+}
+
+export_logs() {
+    local output_dir="${1:-/tmp/pyrite-logs-$(date +%Y%m%d-%H%M%S)}"
+    
+    print_info "Exporting system logs to: $output_dir"
+    mkdir -p "$output_dir"
+    
+    # Export various log categories
+    journalctl -b > "$output_dir/boot.log"
+    journalctl -k > "$output_dir/kernel.log"
+    journalctl -p err --since "1 week ago" > "$output_dir/errors.log"
+    systemctl list-units --failed > "$output_dir/failed-services.txt"
+    dmesg > "$output_dir/dmesg.log"
+    
+    # System info
+    uname -a > "$output_dir/system-info.txt"
+    free -h >> "$output_dir/system-info.txt"
+    df -h >> "$output_dir/system-info.txt"
+    lscpu >> "$output_dir/system-info.txt"
+    lspci >> "$output_dir/system-info.txt"
+    
+    print_success "Logs exported to: $output_dir"
+}
+
+interactive_menu() {
+    while true; do
+        echo -e "${BLUE}"
+        echo "████████████████████████████████████████████████████████████████"
+        echo "██                                                            ██"
+        echo "██                   Pyrite Log Analyzer                      ██"
+        echo "██                                                            ██"
+        echo "████████████████████████████████████████████████████████████████"
+        echo -e "${NC}"
+        echo
+        
+        echo "Log Analysis Options:"
+        echo "===================="
+        echo
+        echo "1) Show boot logs"
+        echo "2) Show kernel logs"
+        echo "3) Show system errors"
+        echo "4) Show failed services"
+        echo "5) Analyze disk usage"
+        echo "6) Analyze memory usage"
+        echo "7) Analyze network issues"
+        echo "8) Analyze boot performance"
+        echo "9) Search logs"
+        echo "10) Show hardware errors"
+        echo "11) Export all logs"
+        echo "12) Exit"
+        echo
+        
+        read -r -p "Select option [1-12]: " choice
+        
+        case "$choice" in
+            1)
+                read -r -p "Number of lines [50]: " lines
+                show_boot_logs "${lines:-50}"
+                ;;
+            2)
+                read -r -p "Number of lines [50]: " lines
+                show_kernel_logs "${lines:-50}"
+                ;;
+            3)
+                read -r -p "Since when [1 hour ago]: " since
+                show_system_errors "${since:-1 hour ago}"
+                ;;
+            4)
+                show_failed_services
+                ;;
+            5)
+                analyze_disk_usage
+                ;;
+            6)
+                analyze_memory_usage
+                ;;
+            7)
+                analyze_network_issues
+                ;;
+            8)
+                analyze_boot_performance
+                ;;
+            9)
+                read -r -p "Search pattern: " pattern
+                if [[ -n "$pattern" ]]; then
+                    read -r -p "Since when [1 day ago]: " since
+                    search_logs "$pattern" "${since:-1 day ago}"
+                fi
+                ;;
+            10)
+                show_hardware_errors
+                ;;
+            11)
+                read -r -p "Output directory [/tmp/pyrite-logs-$(date +%Y%m%d-%H%M%S)]: " output_dir
+                export_logs "$output_dir"
+                ;;
+            12)
+                print_info "Exiting Pyrite Log Analyzer"
+                exit 0
+                ;;
+            *)
+                print_warning "Invalid selection"
+                ;;
+        esac
+        
+        echo
+        read -r -p "Press Enter to continue..."
+        clear
+    done
+}
+
+show_help() {
+    echo "Pyrite Log Analyzer - System log analysis and troubleshooting"
+    echo
+    echo "Usage: pyrite-logs [COMMAND] [OPTIONS]"
+    echo
+    echo "Commands:"
+    echo "  boot [LINES]           Show boot logs"
+    echo "  kernel [LINES]         Show kernel logs"
+    echo "  errors [SINCE]         Show system errors"
+    echo "  failed                 Show failed services"
+    echo "  disk                   Analyze disk usage"
+    echo "  memory                 Analyze memory usage"
+    echo "  network                Analyze network issues"
+    echo "  performance            Analyze boot performance"
+    echo "  search PATTERN [SINCE] Search logs for pattern"
+    echo "  hardware               Show hardware errors"
+    echo "  export [DIR]           Export all logs"
+    echo
+    echo "Options:"
+    echo "  -h, --help            Show this help message"
+    echo "  -i, --interactive     Launch interactive menu"
+    echo
+    echo "Examples:"
+    echo "  pyrite-logs boot 100"
+    echo "  pyrite-logs errors '2 hours ago'"
+    echo "  pyrite-logs search 'network' '1 day ago'"
+}
+
+main() {
+    case "${1:-}" in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        -i|--interactive|"")
+            interactive_menu
+            ;;
+        boot)
+            show_boot_logs "${2:-50}"
+            ;;
+        kernel)
+            show_kernel_logs "${2:-50}"
+            ;;
+        errors)
+            show_system_errors "${2:-1 hour ago}"
+            ;;
+        failed)
+            show_failed_services
+            ;;
+        disk)
+            analyze_disk_usage
+            ;;
+        memory)
+            analyze_memory_usage
+            ;;
+        network)
+            analyze_network_issues
+            ;;
+        performance)
+            analyze_boot_performance
+            ;;
+        search)
+            if [[ -n "${2:-}" ]]; then
+                search_logs "$2" "${3:-1 day ago}"
+            else
+                print_error "Search pattern required"
+                exit 1
+            fi
+            ;;
+        hardware)
+            show_hardware_errors
+            ;;
+        export)
+            export_logs "${2:-}"
+            ;;
+        *)
+            print_error "Unknown command: $1"
+            show_help
+            exit 1
+            ;;
+    esac
+}
+
+# Script entry point
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
